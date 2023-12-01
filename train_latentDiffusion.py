@@ -3,6 +3,7 @@ from monai import transforms
 from monai.data import CacheDataset, DataLoader
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor, LearningRateFinder, BatchSizeFinder
 import pytorch_lightning as pl
+from pytorch_lightning.strategies import DDPStrategy
 from src import *
 
 
@@ -155,8 +156,9 @@ class MyLatentDiffusionConditional(pl.LightningModule):
         return DataLoader(self.train_dataset,
                           batch_size=self.hparams.batch_size,
                           shuffle=True,
-                          num_workers=0,
-                          drop_last=True,)
+                          num_workers=4,
+                          drop_last=False,
+                          persistent_workers=True)
  
     def configure_optimizers(self):
         return  torch.optim.AdamW(list(filter(lambda p: p.requires_grad, self.diff_model.parameters())), lr=self.hparams.lr)
@@ -165,14 +167,14 @@ class MyLatentDiffusionConditional(pl.LightningModule):
 if __name__ == "__main__":
     data_path = './catphan_betterReg/'  
     max_epochs = 50000 
-    lr = 2.5e-5  # 1e-4
-    batch_size = 24 
-    img_shape = 512 
+    lr = 1e-4  # 1e-4
+    batch_size = 32
+    img_shape = 256
     aug_prob = 0.5
     in_range = (29500,36000)
     out_range = (0,1)
-    devices = [0,1]
-    accumulate_grad_batches = 2
+    devices = [0,1,2,3]
+    accumulate_grad_batches = 1
 
     model = MyLatentDiffusionConditional(data_path=data_path, aug_prob=aug_prob,
                                           lr=lr, batch_size=batch_size, in_range=in_range,
@@ -191,8 +193,9 @@ if __name__ == "__main__":
     # bsf_cb = BatchSizeFinder(mode='binsearch', init_val=16)
     # lrf_cb = LearningRateFinder(min_lr=1e-6, max_lr=1e-2, num_training_steps=100, update_attr=True)
 
+    ddp = DDPStrategy(process_group_backend='gloo', find_unused_parameters=True)
     trainer = pl.Trainer(max_epochs=max_epochs, callbacks=[EMA(0.9999), ckp_cb, lr_cb],
-                          accelerator='gpu', devices=devices, strategy='ddp_find_unused_parameters_true',
+                          accelerator='gpu', devices=devices, strategy=ddp,
                           log_every_n_steps=12, accumulate_grad_batches=accumulate_grad_batches,
                         )
 
