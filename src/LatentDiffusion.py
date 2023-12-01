@@ -9,9 +9,7 @@ from diffusers.models import AutoencoderKL
 from .DenoisingDiffusionProcess import *
 
 class AutoEncoder(nn.Module):
-    def __init__(self,
-                 model_type= "stabilityai/sd-vae-ft-ema"#@param ["stabilityai/sd-vae-ft-mse", "stabilityai/sd-vae-ft-ema"]
-                ):
+    def __init__(self, model_type= "stabilityai/sd-vae-ft-ema"):
         """
             A wrapper for an AutoEncoder model
             
@@ -22,7 +20,8 @@ class AutoEncoder(nn.Module):
         """
         
         super().__init__()
-        self.model=AutoencoderKL.from_pretrained(model_type)
+        self.model=AutoencoderKL.from_pretrained(model_type, local_file_only=True)
+        print('AutoEncoder loaded')
         
     def forward(self,input):
         return self.model(input).sample
@@ -39,7 +38,7 @@ class AutoEncoder(nn.Module):
 
 class LatentDiffusion(pl.LightningModule):
     def __init__(self,
-                 train_dataset,
+                 train_dataset=None,
                  valid_dataset=None,
                  num_timesteps=1000,
                  latent_scale_factor=0.1,
@@ -68,7 +67,7 @@ class LatentDiffusion(pl.LightningModule):
         return self.output_T(self.ae.decode(self.model(*args,**kwargs)/self.latent_scale_factor))
     
     def input_T(self, input):
-        # By default, let the model accept samples in [0,1] range, and transform them automatically
+        # By default, let the model accept samples in [0,1] range, and transform them to [-1,1] automatically
         return (input.clip(0,1).mul_(2)).sub_(1)
     
     def output_T(self, input):
