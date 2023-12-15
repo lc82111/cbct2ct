@@ -121,8 +121,8 @@ class DenoisingDiffusionConditionalProcess(nn.Module):
                                                     schedule=schedule)
         
         # Neural Network Backbone
-        self.model=UnetConvNextBlock(dim=64,
-                                     dim_mults = (1,2,4,8),
+        self.model=UnetConvNextBlock(dim=96,  #64
+                                     dim_mults = (1,2,4,8,16),  # (1,2,4,8)
                                      channels=self.generated_channels + condition_channels,
                                      out_dim=self.generated_channels,
                                      with_time_emb=True)
