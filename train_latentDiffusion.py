@@ -47,25 +47,25 @@ class RandomShapes(Transform):
         self.max_replace_value = max_replace_value
         self.rng = np.random.RandomState()
 
-    def _generate_circle_location(self, data_shape):
+    def _generate_center_radius(self, data_shape):
         max_dim = max(data_shape)
         while True:
             x = self.rng.randint(0, max_dim)
             y = self.rng.randint(0, max_dim)
             radius = self.rng.randint(self.min_radius, self.max_radius + 1)
-            if x + radius <= max_dim and y + radius <= max_dim:
-                return (x, y)
+            if x + radius <= max_dim and y + radius <= max_dim and x - radius >= 0 and y - radius >= 0:
+                return (x, y), radius
 
-    def _generate_circles(self, data_shape):
-        circles = []
+    def generate_masks(self, data_shape):
+        masks = []
         num_circles = self.rng.randint(self.min_num_circles, self.max_num_circles + 1)
         for _ in range(num_circles):
             if self.rng.random() < self.prob:
-                center = self._generate_circle_location(data_shape)
-                radius = self.rng.randint(self.min_radius, self.max_radius + 1)
+                center, radius = self._generate_center_radius(data_shape)
                 replace_value = self.rng.uniform(self.min_replace_value, self.max_replace_value)
-                circles.append((center, radius, replace_value))
-        return circles
+                mask = self._generate_mask(data_shape, center, radius)
+                masks.append((mask, replace_value))
+        return masks
 
     def _generate_mask(self, data_shape, center, radius):
         """
@@ -89,25 +89,14 @@ class RandomShapes(Transform):
         return mask
 
     def __call__(self, data):
-        transformed_data = defaultdict(dict)
-        for key, image in data.items():
-            if isinstance(image, torch.Tensor):
-                image = image.cpu().detach().numpy()  # Convert to NumPy for mask generation
+        key = next(iter(data.keys()))
+        image_shape = data[key].shape[1:]
 
-            image_shape = image.shape
+        for msk, val in self.generate_masks(image_shape):
+            for key in data.keys():
+                data[key][0][msk] = val 
 
-            transformed_image = image.copy()
-            for center, radius, replace_value in self._generate_circles(image_shape):
-                mask = self._generate_circle_mask(image_shape, center, radius)
-                transformed_image[mask] = replace_value
-
-            if isinstance(transformed_image, np.ndarray):
-                transformed_image = torch.from_numpy(transformed_image)  # Convert back to PyTorch tensor
-
-            transformed_data[key] = transformed_image
-
-        self._generated_circles = None
-        return transformed_data
+        return data
 
 def get_dataset(path='./catphan/', cache_rate=1.0, img_shape=512, in_range=(0,65535), out_range=(0, 1), aug_prob=0.5):
     # Step 1: Create a list of image pairs
@@ -128,7 +117,7 @@ def get_dataset(path='./catphan/', cache_rate=1.0, img_shape=512, in_range=(0,65
             # transforms.RandSpatialCropd(keys=["cbct", "ct"], roi_size=(64, 64, 1), random_size=False),
             transforms.ScaleIntensityRanged(keys=keys, a_min=in_range[0], a_max=in_range[1], b_min=out_range[0], b_max=out_range[1], clip=True),
             transforms.Resized(keys=keys, spatial_size=(img_shape, img_shape), mode="bilinear"),
-            RandomShapes(prob=aug_prob, min_radius=10, max_radius=60, min_num_circles=10, max_num_circles=35, min_replace_value=0, max_replace_value=1),
+            RandomShapes(prob=aug_prob, min_radius=5, max_radius=25, min_num_circles=5, max_num_circles=20, min_replace_value=0, max_replace_value=1),
             transforms.RandAffined(keys=keys, mode=("bilinear", "nearest"), prob=aug_prob, padding_mode="zeros", cache_grid=True,
                                    rotate_range=(np.pi, np.pi*2),
                                 #    scale_range=(-0.1, 0.1),
@@ -140,7 +129,7 @@ def get_dataset(path='./catphan/', cache_rate=1.0, img_shape=512, in_range=(0,65
     )
 
     # Step 3: Create CacheDataset and DataLoader
-    train_dataset = CacheDataset(data=image_fn_pairs, transform=train_transforms, cache_rate=cache_rate, num_workers=4)
+    train_dataset = CacheDataset(data=image_fn_pairs, transform=train_transforms, cache_rate=cache_rate, num_workers=0)
     return train_dataset
 
 class MyLatentDiffusionConditional(pl.LightningModule):
@@ -251,7 +240,7 @@ class MyLatentDiffusionConditional(pl.LightningModule):
         return sct, ct.meta['filename_or_obj']
 
     def train_dataloader(self):
-        self.train_dataset = get_dataset(self.hparams.data_path, 1, img_shape=self.hparams.img_shape,
+        self.train_dataset = get_dataset(self.hparams.data_path, 0.5, img_shape=self.hparams.img_shape,
                                           aug_prob=self.hparams.aug_prob,
                                           in_range=self.hparams.in_range,
                                           out_range=self.hparams.out_range,
@@ -259,25 +248,26 @@ class MyLatentDiffusionConditional(pl.LightningModule):
         return DataLoader(self.train_dataset,
                           batch_size=self.hparams.batch_size,
                           shuffle=True,
-                          num_workers=4,
+                          num_workers=0,
                           drop_last=False,
-                          persistent_workers=True)
+                          persistent_workers=False)
  
     def configure_optimizers(self):
         return  torch.optim.AdamW(list(filter(lambda p: p.requires_grad, self.diff_model.parameters())), lr=self.hparams.lr)
 
 
 if __name__ == "__main__":
-    data_path = './catphan_betterReg/'  
-    max_epochs = 50000 
+    # data_path = '../catphan_betterReg/'  
+    data_path = '../catphan/'  
+    max_epochs = 10000
     lr = 1e-4  # 1e-4
-    batch_size = 32
-    img_shape = 256
-    aug_prob = 0.5
-    in_range = (29500,36000)
+    batch_size = 6
+    img_shape = 512
+    aug_prob = 1 
+    in_range = (0,65535)
     out_range = (0,1)
-    devices = [0,1,2,3]
-    accumulate_grad_batches = 1
+    devices = [0]
+    accumulate_grad_batches = 4
 
     model = MyLatentDiffusionConditional(data_path=data_path, aug_prob=aug_prob,
                                           lr=lr, batch_size=batch_size, in_range=in_range,
