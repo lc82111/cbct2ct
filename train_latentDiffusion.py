@@ -1,11 +1,113 @@
 from pathlib import Path
+
 from monai import transforms
 from monai.data import CacheDataset, DataLoader
+from monai.transforms import Transform, RandomizableTransform, MapTransform
+from monai.config import DtypeLike, KeysCollection
+from monai.config.type_definitions import NdarrayOrTensor
+from monai.utils import convert_to_tensor, ensure_tuple, ensure_tuple_rep
+from monai.data.meta_obj import get_track_meta
+from monai.utils import ensure_tuple
+
+from typing import Callable, Hashable, Mapping, Sequence
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor, LearningRateFinder, BatchSizeFinder
 import pytorch_lightning as pl
 from pytorch_lightning.strategies import DDPStrategy
 from src import *
 
+from collections import defaultdict
+from skimage.draw import disk, ellipse, rectangle
+
+import numpy as np
+import torch
+
+
+class RandomShapes(Transform):
+    """
+    Applies random shapes with varying sizes and locations to each image in a dictionary.
+    Supports both NumPy arrays and PyTorch tensors.
+    """
+
+    def __init__(self,
+                 prob: float = 1.0,
+                 min_radius: int = 10,
+                 max_radius: int = 60,
+                 min_num_circles: int = 10,
+                 max_num_circles: int = 30,
+                 min_replace_value: float = 0,
+                 max_replace_value: float = 1, 
+                 ):
+        super().__init__()
+        self.prob = prob
+        self.min_radius = min_radius
+        self.max_radius = max_radius
+        self.min_num_circles = min_num_circles
+        self.max_num_circles = max_num_circles or self.min_num_circles
+        self.min_replace_value = min_replace_value
+        self.max_replace_value = max_replace_value
+        self.rng = np.random.RandomState()
+
+    def _generate_circle_location(self, data_shape):
+        max_dim = max(data_shape)
+        while True:
+            x = self.rng.randint(0, max_dim)
+            y = self.rng.randint(0, max_dim)
+            radius = self.rng.randint(self.min_radius, self.max_radius + 1)
+            if x + radius <= max_dim and y + radius <= max_dim:
+                return (x, y)
+
+    def _generate_circles(self, data_shape):
+        circles = []
+        num_circles = self.rng.randint(self.min_num_circles, self.max_num_circles + 1)
+        for _ in range(num_circles):
+            if self.rng.random() < self.prob:
+                center = self._generate_circle_location(data_shape)
+                radius = self.rng.randint(self.min_radius, self.max_radius + 1)
+                replace_value = self.rng.uniform(self.min_replace_value, self.max_replace_value)
+                circles.append((center, radius, replace_value))
+        return circles
+
+    def _generate_mask(self, data_shape, center, radius):
+        """
+        Generates a mask randomly from disk, elipse, and rectangle  using skimage.draw.
+        """
+        r_radius = self.rng.randint(radius-5, radius+5)
+        c_radius = self.rng.randint(radius-5, radius+5)
+
+        # random shape
+        rand_value = self.rng.randint(0, 3)
+        if rand_value == 0:
+            rr, cc = ellipse(center[0], center[1], r_radius, c_radius, shape=data_shape, rotation=self.rng.randint(-np.pi, np.pi))
+        elif rand_value == 1:
+            rr, cc = rectangle(start=(center[0]-c_radius, center[1]-r_radius), end=(center[0]+c_radius, center[1]+r_radius), shape=data_shape)
+        else:
+            rr, cc = disk(center, radius, shape=data_shape)
+
+        mask = np.zeros(data_shape, dtype=bool)
+        mask[rr, cc] = True
+
+        return mask
+
+    def __call__(self, data):
+        transformed_data = defaultdict(dict)
+        for key, image in data.items():
+            if isinstance(image, torch.Tensor):
+                image = image.cpu().detach().numpy()  # Convert to NumPy for mask generation
+
+            image_shape = image.shape
+
+            transformed_image = image.copy()
+            for center, radius, replace_value in self._generate_circles(image_shape):
+                mask = self._generate_circle_mask(image_shape, center, radius)
+                transformed_image[mask] = replace_value
+
+            if isinstance(transformed_image, np.ndarray):
+                transformed_image = torch.from_numpy(transformed_image)  # Convert back to PyTorch tensor
+
+            transformed_data[key] = transformed_image
+
+        self._generated_circles = None
+        return transformed_data
 
 def get_dataset(path='./catphan/', cache_rate=1.0, img_shape=512, in_range=(0,65535), out_range=(0, 1), aug_prob=0.5):
     # Step 1: Create a list of image pairs
@@ -26,6 +128,7 @@ def get_dataset(path='./catphan/', cache_rate=1.0, img_shape=512, in_range=(0,65
             # transforms.RandSpatialCropd(keys=["cbct", "ct"], roi_size=(64, 64, 1), random_size=False),
             transforms.ScaleIntensityRanged(keys=keys, a_min=in_range[0], a_max=in_range[1], b_min=out_range[0], b_max=out_range[1], clip=True),
             transforms.Resized(keys=keys, spatial_size=(img_shape, img_shape), mode="bilinear"),
+            RandomShapes(prob=aug_prob, min_radius=10, max_radius=60, min_num_circles=10, max_num_circles=35, min_replace_value=0, max_replace_value=1),
             transforms.RandAffined(keys=keys, mode=("bilinear", "nearest"), prob=aug_prob, padding_mode="zeros", cache_grid=True,
                                    rotate_range=(np.pi, np.pi*2),
                                 #    scale_range=(-0.1, 0.1),
