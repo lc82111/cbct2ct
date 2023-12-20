@@ -120,10 +120,10 @@ def get_dataset(path='./catphan/', cache_rate=1.0, img_shape=512, in_range=(0,65
             RandomShapes(prob=aug_prob, min_radius=5, max_radius=25, min_num_circles=5, max_num_circles=20, min_replace_value=0, max_replace_value=1),
             transforms.RandAffined(keys=keys, mode=("bilinear", "nearest"), prob=aug_prob, padding_mode="zeros", cache_grid=True,
                                    rotate_range=(np.pi, np.pi*2),
-                                #    scale_range=(-0.1, 0.1),
+                                   scale_range=(-0.1, 0.1),
                                    translate_range=(0, 50),
                                     ),
-            # transforms.RandShiftIntensityd(keys=keys, offsets=(-0.1, 0.1), prob=aug_prob),
+            transforms.RandShiftIntensityd(keys=['cbct'], offsets=(-0.1, 0.1), prob=aug_prob),
             # transforms.RandCoarseDropoutd(keys=keys, holes=50, spatial_size=20, fill_value=0, prob=aug_prob),
         ]
     )
@@ -259,7 +259,7 @@ class MyLatentDiffusionConditional(pl.LightningModule):
 if __name__ == "__main__":
     data_path = '../catphan_betterReg2/'  
     max_epochs = 10000
-    lr = 1e-4  # 1e-4
+    lr = 6e-5  # 1e-4
     batch_size = 6
     img_shape = 512
     aug_prob = 1 
@@ -274,7 +274,7 @@ if __name__ == "__main__":
     
     # resume the training
     model = MyLatentDiffusionConditional.load_from_checkpoint(
-                                    './lightning_logs/version_14/checkpoints/epoch=3082-train_loss=0.000096.ckpt',
+                                    './lightning_logs/version_15/checkpoints/epoch=6267-train_loss=0.000113.ckpt',
                                     lr=lr)
 
     ckp_cb = ModelCheckpoint(save_top_k=3, monitor='train_loss', mode='min', save_last=True,
