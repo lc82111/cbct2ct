@@ -248,17 +248,16 @@ class MyLatentDiffusionConditional(pl.LightningModule):
         return DataLoader(self.train_dataset,
                           batch_size=self.hparams.batch_size,
                           shuffle=True,
-                          num_workers=0,
+                          num_workers=20,
                           drop_last=False,
-                          persistent_workers=False)
+                          persistent_workers=True)
  
     def configure_optimizers(self):
         return  torch.optim.AdamW(list(filter(lambda p: p.requires_grad, self.diff_model.parameters())), lr=self.hparams.lr)
 
 
 if __name__ == "__main__":
-    # data_path = '../catphan_betterReg/'  
-    data_path = '../catphan/'  
+    data_path = '../catphan_betterReg2/'  
     max_epochs = 10000
     lr = 1e-4  # 1e-4
     batch_size = 6
@@ -266,19 +265,19 @@ if __name__ == "__main__":
     aug_prob = 1 
     in_range = (0,65535)
     out_range = (0,1)
-    devices = [0]
+    devices = [0,1,2]
     accumulate_grad_batches = 4
 
-    model = MyLatentDiffusionConditional(data_path=data_path, aug_prob=aug_prob,
-                                          lr=lr, batch_size=batch_size, in_range=in_range,
-                                          out_range=out_range, img_shape=img_shape)
+    #model = MyLatentDiffusionConditional(data_path=data_path, aug_prob=aug_prob,
+    #                                      lr=lr, batch_size=batch_size, in_range=in_range,
+    #                                     out_range=out_range, img_shape=img_shape)
     
     # resume the training
-    # model = MyLatentDiffusionConditional.load_from_checkpoint(
-    #                                 './lightning_logs/version_1/checkpoints/epoch=9952-train_loss=0.001200.ckpt',
-    #                                 lr=lr)
+    model = MyLatentDiffusionConditional.load_from_checkpoint(
+                                    './lightning_logs/version_14/checkpoints/epoch=3082-train_loss=0.000096.ckpt',
+                                    lr=lr)
 
-    ckp_cb = ModelCheckpoint(save_top_k=3, monitor='train_loss', mode='min',
+    ckp_cb = ModelCheckpoint(save_top_k=3, monitor='train_loss', mode='min', save_last=True,
                               filename='{epoch}-{train_loss:.6f}', save_on_train_epoch_end=True, verbose=True)
     lr_cb =  LearningRateMonitor(logging_interval='epoch') 
 
